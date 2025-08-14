@@ -62,7 +62,7 @@ def draw_roi(frame, roi):
     cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 200, 0), 2)
     cv2.putText(frame, "ROI", (x, max(0, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 180, 0), 2, cv2.LINE_AA)
 
-def center_in_roi(box_xyxy, roi):
+def intersects_roi(box_xyxy, roi):
     """
     # 목적: 바운딩박스 중심점이 ROI 내부인지 판정
     # 입력: box_xyxy = (x1, y1, x2, y2), roi = (rx, ry, rw, rh) or None
@@ -76,6 +76,25 @@ def center_in_roi(box_xyxy, roi):
 
     rx, ry, rw, rh = roi
     return (rx <= cx <= rx + rw) and (ry <= cy <= ry + rh)
+
+def intersects_roi(box_xyxy, roi):
+    """
+    box_xyxy: (x1, y1, x2, y2)
+    roi: (rx, ry, rw, rh)
+    """
+    if roi is None:
+        return True  # ROI 미설정 시 무조건 True
+
+    x1, y1, x2, y2 = box_xyxy
+    rx, ry, rw, rh = roi
+    roi_x2, roi_y2 = rx + rw, ry + rh
+
+    # 겹치는 영역 크기 계산
+    overlap_x = max(0, min(x2, roi_x2) - max(x1, rx))
+    overlap_y = max(0, min(y2, roi_y2) - max(y1, ry))
+
+    return overlap_x > 0 and overlap_y > 0
+
 
 def main():
     # 카메라 오픈
@@ -120,7 +139,7 @@ def main():
                 class_name = CLASS_NAME.get(cls_id, str(cls_id))
 
                 # ROI 내부 여부 판정(박스 중심 기준)
-                in_roi = center_in_roi((x1, y1, x2, y2), roi)
+                in_roi = intersects_roi((x1, y1, x2, y2), roi)
 
                 # ROI 내부면 경고용 빨간 박스, 외부면 회색 박스
                 color = (0, 0, 255) if in_roi else (180, 180, 180)
