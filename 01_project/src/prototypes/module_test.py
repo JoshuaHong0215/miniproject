@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # 캠에서 YOLO + ROI로 사람과 개 감지, ROI 내부 감지 시 빨간 박스 + "CAUTION" 배너 표시
 
 import cv2
