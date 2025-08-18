@@ -64,6 +64,24 @@ def draw_state_overlay(frame, state, remain_sec, mode_text):
     if mode_text:
         cv2.putText(frame, mode_text, (x, y+44), font, scale, (255,255,255), thick, cv2.LINE_AA)
 
+def draw_people_count(frame, count):
+    # 목적: 우상단에 사람 수 표시
+    h, w = frame.shape[:2]
+    text = f"PEOPLE: {count}"
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale, thick = 0.8, 2
+    # 텍스트 크기 계산 후, 오른쪽 여백 10px, 위쪽 여백 10px
+    (tw, th), _ = cv2.getTextSize(text, font, scale, thick)
+    x = w - tw - 10
+    y = 10 + th
+    # 반투명 배경 박스
+    bg_pad = 6
+    cv2.rectangle(frame, (x - bg_pad, y - th - bg_pad),
+                         (x + tw + bg_pad, y + bg_pad),
+                         (0, 0, 0), -1)
+    # 텍스트
+    cv2.putText(frame, text, (x, y), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
+
 # =========================
 # 비블로킹 도어 상태머신
 # =========================
@@ -180,6 +198,7 @@ def main():
         # 감지
         results = model(frame, conf=CONFIDENCE, classes=TARGET_CLASS_IDS, verbose=False)[0]
         person_present = False
+        person_count = 0
         kinds = set()
 
         if results.boxes is not None and len(results.boxes) > 0:
@@ -196,6 +215,8 @@ def main():
 
                 if cls_id == 0:
                     person_present = True
+                    person_count += 1
+
                 if cls_id in CLASS_NAME:
                     kinds.add(name)
 
@@ -213,6 +234,17 @@ def main():
             last_time = now
             cv2.putText(frame, f"FPS: {fps:.1f}", (10, 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2, cv2.LINE_AA)
+            
+        if kinds:
+            draw_caution_banner(frame, kinds)
+
+        # 상태 업데이트 + 상태/잔여시간 오버레이
+        now = time.time()
+        state, remain, mode_text = door.update(now, person_present)
+        draw_state_overlay(frame, state, remain, mode_text)
+
+        # ★ 사람 수 표시
+        draw_people_count(frame, person_count) 
 
         # 출력/입력
         cv2.imshow(window, frame)
