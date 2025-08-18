@@ -51,50 +51,6 @@ def draw_caution_banner(frame, kinds):
     cv2.rectangle(frame, (x - pad, y - th - pad), (x + tw + pad, y + pad), (0, 0, 255), -1)
     cv2.putText(frame, text, (x, y), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
 
-# def draw_roi(frame, roi):
-#     """
-#     # 목적: 설정된 ROI를 화면에 녹색 박스로 시각화
-#     """
-#     if roi is None:
-#         return
-#     x, y, w, h = roi
-#     cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 200, 0), 2)
-#     cv2.putText(frame, "ROI", (x, max(0, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 180, 0), 2, cv2.LINE_AA)
-
-# def intersects_roi(box_xyxy, roi):
-#     """
-#     # 목적: 바운딩박스 중심점이 ROI 내부인지 판정
-#     # 입력: box_xyxy = (x1, y1, x2, y2), roi = (rx, ry, rw, rh) or None
-#     # 반환: True/False
-#     """
-#     if roi is None:
-#         return True
-#     x1, y1, x2, y2 = box_xyxy
-#     cx = (x1 + x2) // 2
-#     cy = (y1 + y2) // 2
-
-#     rx, ry, rw, rh = roi
-#     return (rx <= cx <= rx + rw) and (ry <= cy <= ry + rh)
-
-# def intersects_roi(box_xyxy, roi):
-#     """
-#     box_xyxy: (x1, y1, x2, y2)
-#     roi: (rx, ry, rw, rh)
-#     """
-#     if roi is None:
-#         return True  # ROI 미설정 시 무조건 True
-
-#     x1, y1, x2, y2 = box_xyxy
-#     rx, ry, rw, rh = roi
-#     roi_x2, roi_y2 = rx + rw, ry + rh
-
-#     # 겹치는 영역 크기 계산
-#     overlap_x = max(0, min(x2, roi_x2) - max(x1, rx))
-#     overlap_y = max(0, min(y2, roi_y2) - max(y1, ry))
-
-#     return overlap_x > 0 and overlap_y > 0
-
-
 def main():
     # 카메라 오픈
     cap = cv2.VideoCapture(CAM_INDEX)
@@ -105,11 +61,9 @@ def main():
     # 모델 로드
     model = load_model()
 
-    # ROI 정보
-    roi = None
     last_time = time.time()
 
-    print("[INFO] Press 's' to select ROI, 'c' to clear ROI, 'q' to quit.")
+    print("[INFO] Press 'q' to quit.")
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -123,7 +77,7 @@ def main():
         # draw_roi(frame, roi)
 
         # 경고 상태 및 원인 클래스들
-        caution_triggered = True
+        caution_triggered = False
         caution_kinds = set()
 
         # 디텍션 처리
@@ -137,24 +91,18 @@ def main():
                 x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
                 class_name = CLASS_NAME.get(cls_id, str(cls_id))
 
-                # ROI 내부 여부 판정(박스 중심 기준)
-                in_roi = intersects_roi((x1, y1, x2, y2), roi)
 
-                # ROI 내부면 경고용 빨간 박스, 외부면 회색 박스
-                color = (0, 0, 255) if in_roi else (180, 180, 180)
-                if in_roi:
-                    caution_triggered = True
-                    caution_kinds.add(class_name)
+                caution_triggered = True
+                caution_kinds.add(class_name)
 
                 # 박스/라벨
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
                 label = f"{class_name} {conf:.2f}"
                 cv2.putText(frame, label, (x1, max(0, y1 - 6)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
 
-                # 콘솔 로그(디버깅)
-                if in_roi:
-                    print(f"[CAUTION] {class_name} in ROI: conf={conf:.2f}, box=({x1},{y1},{x2},{y2})")
+                # # 콘솔 로그(디버깅)
+                print(f"[CAUTION] {class_name} detected: conf={conf:.2f}, box=({x1},{y1},{x2},{y2})")
 
         # 경고 배너
         if caution_triggered:
@@ -175,20 +123,7 @@ def main():
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):      # 종료
             break
-        elif key == ord('s'):    # ROI 선택
-            frozen = frame.copy()
-            sel = cv2.selectROI("Select ROI (Enter/Space=OK, c=Cancel)", frozen, fromCenter=False, showCrosshair=True)
-            cv2.destroyWindow("Select ROI (Enter/Space=OK, c=Cancel)")
-            x, y, w, h = map(int, sel)
-            if w > 0 and h > 0:
-                roi = (x, y, w, h)
-                print(f"[INFO] ROI set to (x={x}, y={y}, w={w}, h={h})")
-            else:
-                print("[INFO] ROI selection canceled.")
-        elif key == ord('c'):    # ROI 해제
-            roi = None
-            print("[INFO] ROI cleared.")
-
+        
     cap.release()
     cv2.destroyAllWindows()
 
