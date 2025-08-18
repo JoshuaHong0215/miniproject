@@ -51,48 +51,48 @@ def draw_caution_banner(frame, kinds):
     cv2.rectangle(frame, (x - pad, y - th - pad), (x + tw + pad, y + pad), (0, 0, 255), -1)
     cv2.putText(frame, text, (x, y), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
 
-def draw_roi(frame, roi):
-    """
-    # 목적: 설정된 ROI를 화면에 녹색 박스로 시각화
-    """
-    if roi is None:
-        return
-    x, y, w, h = roi
-    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 200, 0), 2)
-    cv2.putText(frame, "ROI", (x, max(0, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 180, 0), 2, cv2.LINE_AA)
+# def draw_roi(frame, roi):
+#     """
+#     # 목적: 설정된 ROI를 화면에 녹색 박스로 시각화
+#     """
+#     if roi is None:
+#         return
+#     x, y, w, h = roi
+#     cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 200, 0), 2)
+#     cv2.putText(frame, "ROI", (x, max(0, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 180, 0), 2, cv2.LINE_AA)
 
-def intersects_roi(box_xyxy, roi):
-    """
-    # 목적: 바운딩박스 중심점이 ROI 내부인지 판정
-    # 입력: box_xyxy = (x1, y1, x2, y2), roi = (rx, ry, rw, rh) or None
-    # 반환: True/False
-    """
-    if roi is None:
-        return True
-    x1, y1, x2, y2 = box_xyxy
-    cx = (x1 + x2) // 2
-    cy = (y1 + y2) // 2
+# def intersects_roi(box_xyxy, roi):
+#     """
+#     # 목적: 바운딩박스 중심점이 ROI 내부인지 판정
+#     # 입력: box_xyxy = (x1, y1, x2, y2), roi = (rx, ry, rw, rh) or None
+#     # 반환: True/False
+#     """
+#     if roi is None:
+#         return True
+#     x1, y1, x2, y2 = box_xyxy
+#     cx = (x1 + x2) // 2
+#     cy = (y1 + y2) // 2
 
-    rx, ry, rw, rh = roi
-    return (rx <= cx <= rx + rw) and (ry <= cy <= ry + rh)
+#     rx, ry, rw, rh = roi
+#     return (rx <= cx <= rx + rw) and (ry <= cy <= ry + rh)
 
-def intersects_roi(box_xyxy, roi):
-    """
-    box_xyxy: (x1, y1, x2, y2)
-    roi: (rx, ry, rw, rh)
-    """
-    if roi is None:
-        return True  # ROI 미설정 시 무조건 True
+# def intersects_roi(box_xyxy, roi):
+#     """
+#     box_xyxy: (x1, y1, x2, y2)
+#     roi: (rx, ry, rw, rh)
+#     """
+#     if roi is None:
+#         return True  # ROI 미설정 시 무조건 True
 
-    x1, y1, x2, y2 = box_xyxy
-    rx, ry, rw, rh = roi
-    roi_x2, roi_y2 = rx + rw, ry + rh
+#     x1, y1, x2, y2 = box_xyxy
+#     rx, ry, rw, rh = roi
+#     roi_x2, roi_y2 = rx + rw, ry + rh
 
-    # 겹치는 영역 크기 계산
-    overlap_x = max(0, min(x2, roi_x2) - max(x1, rx))
-    overlap_y = max(0, min(y2, roi_y2) - max(y1, ry))
+#     # 겹치는 영역 크기 계산
+#     overlap_x = max(0, min(x2, roi_x2) - max(x1, rx))
+#     overlap_y = max(0, min(y2, roi_y2) - max(y1, ry))
 
-    return overlap_x > 0 and overlap_y > 0
+#     return overlap_x > 0 and overlap_y > 0
 
 
 def main():
@@ -120,10 +120,10 @@ def main():
         results = model(frame, conf=CONFIDENCE, classes=TARGET_CLASS_IDS, verbose=False)[0]
 
         # ROI 시각화
-        draw_roi(frame, roi)
+        # draw_roi(frame, roi)
 
         # 경고 상태 및 원인 클래스들
-        caution_triggered = False
+        caution_triggered = True
         caution_kinds = set()
 
         # 디텍션 처리
