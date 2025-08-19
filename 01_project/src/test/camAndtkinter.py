@@ -6,6 +6,8 @@ import time
 import threading
 from dataclasses import dataclass, field
 from typing import Set, Optional
+from collections import deque       # 호출 큐
+
 
 import tkinter as tk
 from tkinter import ttk
