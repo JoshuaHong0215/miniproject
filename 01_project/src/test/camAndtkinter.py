@@ -5,29 +5,35 @@ import cv2
 import time
 import threading
 from dataclasses import dataclass, field
-from typing import Set
-from ultralytics import YOLO
+from typing import Set, Optional
+
 import tkinter as tk
 from tkinter import ttk
+from PIL import Image, ImageTk   # Tk에 OpenCV 프레임 표시용
+
+from ultralytics import YOLO
 
 # =========================
-# 사용자 설정 (module_test_02.py 기반)
+# 사용자 설정
 # =========================
 MODEL_CANDIDATES = ['yolo11n.pt', 'yolov8n.pt']
 CONFIDENCE = 0.3
 CAM_INDEX = 0
 SHOW_FPS = True
 
-# 관심 클래스: 사람(0), 개(16) — 필요 시 수정
+# 관심 클래스: 사람(0), 개(16)
 TARGET_CLASS_IDS = [0, 16]
 CLASS_NAME = {0: 'person', 16: 'dog'}
 
-# 타이밍(초): 4/7/4 기본, '사람 전혀 없음'이면 4/4/4
+# 도어 타이밍(초)
 OPENING_SEC = 4
 HOLD_DEFAULT = 7
 HOLD_SHORT = 4
 CLOSING_SEC = 4
-START_ON_BOOT = False  # Tk 쪽 [Start] 버튼으로 시작하게 함
+
+# Tk 안의 카메라 미리보기 크기
+CAM_VIEW_W = 400
+CAM_VIEW_H = 300
 
 # =========================
 # 공유 상태
@@ -37,18 +43,20 @@ class Shared:
     lock: threading.Lock = field(default_factory=threading.Lock)
     # 카메라/YOLO → 컨트롤러
     person_present: bool = False
-    # 컨트롤러 → 카메라/Tk overlay
-    state: str = "IDLE"
-    remain: float = 0.0
-    mode_text: str = ""  # "MODE: 4/7/4" or "MODE: 4/4/4 ..."
     person_count: int = 0
     kinds: Set[str] = field(default_factory=set)
+    # 컨트롤러 → 상태 표시
+    state: str = "IDLE"
+    remain: float = 0.0
+    mode_text: str = ""
+    # 카메라 프레임(BGR)
+    frame_bgr: Optional[any] = None
 
 shared = Shared()
 stop_event = threading.Event()
 
 # =========================
-# 유틸 (module_test_02.py에서 사용)
+# 유틸
 # =========================
 def load_model():
     last_err = None
@@ -99,7 +107,7 @@ def draw_state_overlay(frame, state, remain_sec, mode_text):
         cv2.putText(frame, mode_text, (x, y+44), font, scale, (255,255,255), thick, cv2.LINE_AA)
 
 # =========================
-# 도어 상태머신 (module_test_02.py 기반)
+# 도어 상태머신
 # =========================
 class DoorController:
     IDLE="IDLE"; OPENING="OPENING"; OPEN_HOLD="OPEN_HOLD"; CLOSING="CLOSING"
@@ -109,7 +117,7 @@ class DoorController:
         self.last_print_sec = 0
         self.seen_in_hold = False
         self.mode_text = ""
-        self.hold_target = HOLD_DEFAULT  # 현재 홀드 목표(7 또는 4)
+        self.hold_target = HOLD_DEFAULT
 
     def start_cycle(self, now: float):
         self.state = self.OPENING
@@ -127,11 +135,7 @@ class DoorController:
         remain = 0.0
         self.mode_text = ""
 
-        if self.state == self.IDLE:
-            # START_ON_BOOT 시 자동 시작(이번 통합에서는 False)
-            pass
-
-        elif self.state == self.OPENING:
+        if self.state == self.OPENING:
             elapsed = now - self.phase_start
             remain = OPENING_SEC - elapsed
             self._print_sec(elapsed, OPENING_SEC)
@@ -156,7 +160,6 @@ class DoorController:
 
             remain = self.hold_target - elapsed
             self._print_sec(elapsed, self.hold_target)
-
             if elapsed >= self.hold_target:
                 self.state = self.CLOSING
                 self.phase_start = now
@@ -176,54 +179,46 @@ class DoorController:
         return self.state, max(0.0, remain), self.mode_text
 
 # =========================
-# Tkinter 문 애니메이션 (module_test_03.py 기반, 컨트롤러 연동)
+# Tkinter 문 애니메이션 + 카메라 미리보기
 # =========================
 class DoorSimApp:
     def __init__(self, root, door: DoorController, shared: Shared):
         self.root = root
         self.door = door
         self.shared = shared
-        self.root.title("Elevator Door 4/7/4 Simulation (Tkinter)")
+        self.root.title("Elevator Door + Camera (Tkinter)")
 
-
-
-        # 캔버스 배치/크기
+        # ----- 먼저 치수 정의 -----
         self.canvas_w = 520
         self.canvas_h = 300
         self.door_gap = 6
-
-        # 문 전체 너비: 캔버스의 60%로 축소 중앙 배치
         door_scale = 0.6
         self.door_width_total = int(self.canvas_w * door_scale)
         self.door_margin = (self.canvas_w - self.door_width_total) // 2
-
         self.panel_half_width = (self.door_width_total - self.door_gap) // 2
         self.panel_height = 220
         self.panel_top = 40
         self.panel_bottom = self.panel_top + self.panel_height
-
-        # 0=닫힘, 1=완전개방
         self.progress = 0.0
-       
-        # 반복 실행 옵션
-        self.loop_enabled = tk.BooleanVar(value=False)
-       
-        # UI
-        self.build_ui()
 
+        self.loop_enabled = tk.BooleanVar(value=False)
+
+        self.build_ui()
 
         # 초기 그리기
         self.draw_static()
         self.draw_doors(0.0)
         self.update_status_text("IDLE", 0.0, "cycle: 4/7/4")
 
-        # 틱 루프
+        # 카메라 이미지 객체 참조(가비지 콜렉션 방지)
+        self._cam_imgtk = None
+
+        # 루프 시작
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(int(1000/30), self.tick)
 
     def build_ui(self):
-        top = tk.Frame(self.root)
-        top.pack(padx=10, pady=10, fill="x")
-
+        top = tk.Frame(self.root); top.pack(padx=10, pady=10, fill="x")
         self.status_var = tk.StringVar(value="state: IDLE | remain: 0s | cycle: 4/7/4")
         tk.Label(top, textvariable=self.status_var, font=("Arial", 12)).pack(anchor="w")
 
@@ -233,48 +228,61 @@ class DoorSimApp:
         ctrl = tk.Frame(top); ctrl.pack(fill="x")
         tk.Button(ctrl, text="Start", width=10, command=self.on_start).pack(side="left", padx=(0,8))
         tk.Checkbutton(ctrl, text="Loop", variable=self.loop_enabled).pack(side="left")
+        tk.Button(ctrl, text="Quit", command=self.on_close).pack(side="right")
 
-        self.canvas = tk.Canvas(self.root, width=self.canvas_w, height=self.canvas_h, bg="#111")
-        self.canvas.pack(padx=10, pady=(0,10))
+        # 좌우 2열: 왼쪽 = 도어 캔버스, 오른쪽 = 카메라 라벨
+        body = tk.Frame(self.root); body.pack(padx=10, pady=(0,10), fill="both")
+        left = tk.Frame(body); left.pack(side="left", padx=(0,10))
+        right = tk.Frame(body); right.pack(side="left")
+
+        self.canvas = tk.Canvas(left, width=self.canvas_w, height=self.canvas_h, bg="#111")
+        self.canvas.pack()
+
+        tk.Label(right, text="Camera Preview", font=("Arial", 11)).pack(anchor="w")
+        self.cam_label = tk.Label(right, width=CAM_VIEW_W, height=CAM_VIEW_H, bg="black")
+        self.cam_label.pack()
 
     def on_start(self):
         self.door.start_cycle(time.time())
 
+    def on_close(self):
+        stop_event.set()
+        self.root.destroy()
+
     def tick(self):
         now = time.time()
 
-        # YOLO에서 온 사람 감지 플래그 읽기
+        # YOLO 감지 플래그 읽기
         with self.shared.lock:
             person_present = self.shared.person_present
 
-        # 컨트롤러 진행
+        # 상태 진행
         state, remain, mode_text = self.door.update(now, person_present)
 
-        # 상태를 공유(카메라 오버레이에서 사용)
+        # 공유 상태 업데이트
         with self.shared.lock:
             self.shared.state = state
             self.shared.remain = remain
             self.shared.mode_text = mode_text
 
-        # 애니메이션 갱신
+        # 도어 애니메이션
         self.animate(state, remain)
 
         # 상태 텍스트
         cycle_txt = "4/7/4" if (state != "OPEN_HOLD" or self.door.hold_target == HOLD_DEFAULT) else "4/4/4"
         self.update_status_text(state.replace("OPEN_HOLD", "DWELL"), remain, f"cycle: {cycle_txt} | {mode_text}")
 
-        # 루프 옵션: IDLE이면 자동 재시작
+        # 카메라 프레임 표시
+        self.update_cam_preview()
+
+        # Loop 옵션
         if state == DoorController.IDLE and self.loop_enabled.get():
             self.door.start_cycle(now)
 
         if not stop_event.is_set():
             self.root.after(int(1000/30), self.tick)
-        else:
-            try:
-                self.root.destroy()
-            except:
-                pass
 
+    # ----- 도어 그리기 -----
     def draw_static(self):
         self.canvas.create_rectangle(
             self.door_margin-6, self.panel_top-6,
@@ -287,13 +295,10 @@ class DoorSimApp:
     def draw_doors(self, p: float):
         cx = self.canvas_w // 2
         half_gap = self.door_gap // 2
-
         left_panel_right = cx - half_gap - int(p * (self.panel_half_width))
         left_panel_left  = left_panel_right - self.panel_half_width
-
         right_panel_left  = cx + half_gap + int(p * (self.panel_half_width))
         right_panel_right = right_panel_left + self.panel_half_width
-
         self.canvas.delete("door")
         self.canvas.create_rectangle(
             left_panel_left, self.panel_top, left_panel_right, self.panel_bottom,
@@ -305,33 +310,40 @@ class DoorSimApp:
         )
 
     def animate(self, state: str, remain: float):
-        # 상태별 진행도 p 계산
         if state == DoorController.OPENING:
             elapsed = OPENING_SEC - remain
             p = min(max(elapsed / max(OPENING_SEC, 1e-6), 0.0), 1.0)
-            self.progress = p
-            self.draw_doors(self.progress)
-            self.pbar["value"] = int(p * 100)
-
+            self.draw_doors(p); self.pbar["value"] = int(p * 100)
         elif state == DoorController.OPEN_HOLD:
-            self.progress = 1.0
-            self.draw_doors(self.progress)
-            self.pbar["value"] = 100
-
+            self.draw_doors(1.0); self.pbar["value"] = 100
         elif state == DoorController.CLOSING:
             elapsed = CLOSING_SEC - remain
             p = max(1.0 - (elapsed / max(CLOSING_SEC, 1e-6)), 0.0)
-            self.progress = p
-            self.draw_doors(self.progress)
-            self.pbar["value"] = int(p * 100)
-
-        else:  # IDLE
-            self.progress = 0.0
-            self.draw_doors(self.progress)
-            self.pbar["value"] = 0
+            self.draw_doors(p); self.pbar["value"] = int(p * 100)
+        else:
+            self.draw_doors(0.0); self.pbar["value"] = 0
 
     def update_status_text(self, state: str, remain: float, extra: str):
         self.status_var.set(f"state: {state} | remain: {remain:.1f}s | {extra}")
+
+    # ----- 카메라 프리뷰(Label에 표시) -----
+    def update_cam_preview(self):
+        frame_bgr = None
+        with self.shared.lock:
+            if self.shared.frame_bgr is not None:
+                frame_bgr = self.shared.frame_bgr.copy()
+
+        if frame_bgr is None:
+            return
+
+        # 크기 맞추기 및 색 변환(BGR→RGB) 후 ImageTk로 변환
+        disp = cv2.resize(frame_bgr, (CAM_VIEW_W, CAM_VIEW_H))
+        disp = cv2.cvtColor(disp, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(disp)
+        imgtk = ImageTk.PhotoImage(image=img)
+        # 참조 유지(가비지 콜렉션 방지)
+        self._cam_imgtk = imgtk
+        self.cam_label.configure(image=imgtk)
 
 # =========================
 # 카메라 + YOLO 스레드
@@ -344,10 +356,8 @@ def camera_worker(shared: Shared, stop_event: threading.Event):
         return
 
     model = load_model()
-    window = "YOLO + DoorController (Linked)"
-    print("[INFO] Press 'q' to quit (OpenCV window).")
-
     last_time = time.time()
+
     while not stop_event.is_set():
         ret, frame = cap.read()
         if not ret:
@@ -366,33 +376,32 @@ def camera_worker(shared: Shared, stop_event: threading.Event):
                 conf = float(conf)
                 cls_id = int(cls)
                 name = CLASS_NAME.get(cls_id, str(cls_id))
-
-                # 박스/라벨
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0,0,255), 2)
                 cv2.putText(frame, f"{name} {conf:.2f}", (x1, max(0, y1-6)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2, cv2.LINE_AA)
-
                 if cls_id == 0:
                     person_present = True
                     person_count += 1
                 if cls_id in CLASS_NAME:
                     kinds.add(name)
 
-        # 공유 플래그 갱신
+        # 컨트롤러 상태 오버레이(동일 정보)
         with shared.lock:
-            shared.person_present = person_present
-            shared.person_count = person_count
-            shared.kinds = kinds.copy()
             s_state = shared.state
             s_remain = shared.remain
             s_mode = shared.mode_text
-
-        # 오버레이
         draw_state_overlay(frame, s_state.replace("OPEN_HOLD", "DWELL"), s_remain, s_mode)
         draw_people_count(frame, person_count)
         draw_caution_banner(frame, kinds)
 
-        # FPS
+        # 공유 상태 갱신 + 프레임 전달
+        with shared.lock:
+            shared.person_present = person_present
+            shared.person_count = person_count
+            shared.kinds = kinds.copy()
+            shared.frame_bgr = frame  # 최신 프레임 저장
+
+        # FPS 계산(표시는 Tk쪽 미리보기에서 충분하므로 여기선 텍스트만 추가해도 됨)
         if SHOW_FPS:
             now = time.time()
             fps = 1.0 / (now - last_time) if (now - last_time) > 0 else 0.0
@@ -400,25 +409,15 @@ def camera_worker(shared: Shared, stop_event: threading.Event):
             cv2.putText(frame, f"FPS: {fps:.1f}", (10, 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2, cv2.LINE_AA)
 
-        # 표시/키입력
-        cv2.imshow(window, frame)
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            stop_event.set()
-            break
-
     cap.release()
-    cv2.destroyAllWindows()
 
 # =========================
 # 엔트리 포인트
 # =========================
 def main():
-    # 카메라/YOLO 스레드 시작
     t = threading.Thread(target=camera_worker, args=(shared, stop_event), daemon=True)
     t.start()
 
-    # Tkinter 메인 루프
     root = tk.Tk()
     app = DoorSimApp(root, DoorController(), shared)
     try:
