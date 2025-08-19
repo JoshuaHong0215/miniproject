@@ -37,6 +37,12 @@ CLOSING_SEC = 4
 CAM_VIEW_W = 400
 CAM_VIEW_H = 300
 
+# Tk 안의 엘리베이터 버튼
+UP = "UP"
+DOWN = "DOWN"
+ARROW = {UP : "↑", DOWN: "↓"}
+
+
 # =========================
 # 공유 상태
 # =========================
@@ -191,6 +197,10 @@ class DoorSimApp:
         self.root.title("Elevator Door + Camera (Tkinter)")
         self.pending_calls = deque()
         self.call_timeout = 30
+    
+        # 엘리베이터 층 범위 설정
+        self.top_floor = 15
+        self.bottom_floor = 1
 
         # ----- 먼저 치수 정의 -----
         self.canvas_w = 520
@@ -259,6 +269,30 @@ class DoorSimApp:
             r = idx // 3 + 1   # 1행부터 버튼(0행은 라벨)
             c = idx % 3
             tk.Button(panel, text=f"{fl}F", width=8, command=lambda f=fl: self.add_call(f)).grid(row=r, column=c, padx=3, pady=3)
+
+        # ----- Up/Down 호출 패널 추가 (기존 층수 패널 아래에 붙이세요) -----
+        hall = tk.LabelFrame(right, text="Hall Calls (Up / Down)", padx=6, pady=6)
+        hall.pack(fill="x", pady=(10, 0))
+
+        # 층 범위(필요 시 self.top_floor/self.bottom_floor가 있다면 그것 사용)
+        top_floor = getattr(self, "top_floor", 15)
+        bottom_floor = getattr(self, "bottom_floor", 1)
+
+        row = 0
+        for fl in range(top_floor, bottom_floor - 1, -1):
+            tk.Label(hall, text=f"{fl}F", width=4, anchor="e").grid(row=row, column=0, padx=(0,6), pady=2)
+
+            up_btn = tk.Button(hall, text="UP", width=6, command=lambda f=fl: self.add_call_dir(f, UP))
+            up_btn.grid(row=row, column=1, padx=2, pady=2)
+            if fl == top_floor:
+                up_btn.configure(state="disabled")
+
+            dn_btn = tk.Button(hall, text="DOWN", width=6, command=lambda f=fl: self.add_call_dir(f, DOWN))
+            dn_btn.grid(row=row, column=2, padx=2, pady=2)
+            if fl == bottom_floor:
+                dn_btn.configure(state="disabled")
+
+            row += 1
 
     def on_start(self):
         self.door.start_cycle(time.time())
@@ -373,16 +407,37 @@ class DoorSimApp:
         self.pending_calls.append((floor, time.time()))
         self.update_calls_label()
 
+    # Up/Down 호출
+    def add_call_dir(self, floor: int, direction: str):
+        if direction not in (UP, DOWN):
+            return
+        self.has_pending_calls.append((floor, direction, time.time()))
+        self.update_calls_label()
+
     # 타임아웃 정리 (tick에서 주기 호출)
-    def cleanup_calls(self, timeout: int):
+    def cleanup_calls(self, timeout_sec: int):
         now = time.time()
         # 좌측(가장 오래된)부터 만료 제거
-        while self.pending_calls and now - self.pending_calls[0][1] > timeout:
-            self.pending_calls.pop(0) if isinstance(self.pending_calls, list) else self.pending_calls.popleft()
+        while self.pending_calls:
+            item = self.pending_calls[0]
+            ts = item[2] if len(item) >= 3 else item[1]
+            if now - ts > timeout_sec:
+                self.pending_calls.popleft()
+            else:
+                break
 
     # 미리보기용
-    def get_pending_preview(self, k: int = 5):
-        return [f for (f, _) in list(self.pending_calls)[:k]]
+    def get_pending_preview(self, k: int = 8):
+        out = []
+        for item in list(self.pending_calls)[:k]:
+            if len(item) >= 3:
+                f, d, _ = item
+            else:
+                f, _ = item
+                d = None
+            tag = f"{f}{ARROW.get(d, '')}" if d else f"{f}"
+            out.append(tag)
+        return out
 
     def update_calls_label(self):
         preview = self.get_pending_preview()
