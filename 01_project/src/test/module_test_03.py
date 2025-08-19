@@ -34,16 +34,22 @@ class DoorSimApp:
         self.build_ui()
 
         # 캔버스에 문 그리기용 좌표/객체
-        self.canvas_w =     # 150
+        self.canvas_w = 520
         self.canvas_h = 300
-        self.door_gap = 6              # 문 사이 중앙 간극
-        self.door_margin = 20          # 좌우 프레임 여유
-        self.door_width_total = self.canvas_w - 2*self.door_margin
+        self.door_gap = 6  # 문 사이 중앙 간극
+
+        # 문 전체 너비를 캔버스의 60%로 축소하고, 가운데 배치
+        door_scale = 0.4                     # 0.5~0.8 사이로 조절
+        self.door_width_total = int(self.canvas_w * door_scale)
+
+        # 프레임을 문 너비에 맞춰 중앙 정렬되게 자동 계산
+        self.door_margin = (self.canvas_w - self.door_width_total) // 2
+
         self.panel_half_width = (self.door_width_total - self.door_gap) // 2
         self.panel_height = 220
         self.panel_top = 40
         self.panel_bottom = self.panel_top + self.panel_height
-
+        
         # "닫힘(=중앙)"이 p=0, "완전 개방"이 p=1
         self.progress = 0.0
 
