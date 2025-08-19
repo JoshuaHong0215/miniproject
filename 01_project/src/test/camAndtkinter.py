@@ -254,49 +254,68 @@ class DoorSimApp:
         tk.Checkbutton(ctrl, text="Loop", variable=self.loop_enabled).pack(side="left")
         tk.Button(ctrl, text="Quit", command=self.on_close).pack(side="right")
 
+        # ===== 본문 =====
         body = tk.Frame(self.root); body.pack(padx=10, pady=(0,10), fill="both")
 
-        # 좌: 도어 캔버스
+        # 좌: 도어 캔버스 (그대로)
         left = tk.Frame(body); left.pack(side="left", padx=(0,10))
         self.canvas = tk.Canvas(left, width=self.canvas_w, height=self.canvas_h, bg="#111")
         self.canvas.pack()
 
-        # 중: 카메라 + 호출 패널
+        # 중: 카메라 (위) + 호출/개념도 (아래 가로 정렬)
         mid = tk.Frame(body); mid.pack(side="left")
-        tk.Label(mid, text="Camera Preview", font=("Arial", 11)).pack(anchor="w")
-        self.cam_label = tk.Label(mid, bg="black")
+
+        # --- 카메라 프리뷰 (상단에 단독) ---
+        cam_sec = tk.Frame(mid); cam_sec.pack(fill="both", expand=True)
+        tk.Label(cam_sec, text="Camera Preview", font=("Arial", 11)).pack(anchor="w")
+        self.cam_label = tk.Label(cam_sec, bg="black")
         self.cam_label.pack()
 
-        # 층수 호출 패널
-        floor_panel = tk.LabelFrame(mid, text="Floor Calls (Direct)", padx=6, pady=6)
-        floor_panel.pack(fill="x", pady=(10, 0))
+        # --- 하단 가로 레일: Floor Calls | Hall Calls | Concept View ---
+        rail = tk.Frame(mid)
+        rail.pack(pady=(10, 0), fill="x")
+
+        # 1) Floor Calls (Direct)
+        floor_panel = tk.LabelFrame(rail, text="Floor Calls (Direct)", padx=6, pady=6)
+        floor_panel.grid(row=0, column=0, sticky="n")
         self.calls_var = tk.StringVar(value="pending: None")
-        tk.Label(floor_panel, textvariable=self.calls_var, anchor="w").grid(row=0, column=0, columnspan=3, sticky="we", pady=(0,6))
+        tk.Label(floor_panel, textvariable=self.calls_var, anchor="w").grid(
+            row=0, column=0, columnspan=3, sticky="we", pady=(0,6)
+        )
         floors = list(range(self.top_floor, self.bottom_floor - 1, -1))
         for idx, fl in enumerate(floors):
             r = idx // 3 + 1
             c = idx % 3
-            tk.Button(floor_panel, text=f"{fl}F", width=8, command=lambda f=fl: self.add_call(f)).grid(row=r, column=c, padx=3, pady=3)
+            tk.Button(floor_panel, text=f"{fl}F", width=8,
+                    command=lambda f=fl: self.add_call(f)).grid(row=r, column=c, padx=3, pady=3)
 
-        # Up/Down 호출 패널
-        hall = tk.LabelFrame(mid, text="Hall Calls (Up/Down)", padx=6, pady=6)
-        hall.pack(fill="x", pady=(10, 0))
+        # 2) Hall Calls (Up/Down)
+        hall = tk.LabelFrame(rail, text="Hall Calls (Up/Down)", padx=6, pady=6)
+        hall.grid(row=0, column=1, padx=(8, 0), sticky="n")
         row = 0
         for fl in range(self.top_floor, self.bottom_floor - 1, -1):
             tk.Label(hall, text=f"{fl}F", width=4, anchor="e").grid(row=row, column=0, padx=(0,6), pady=2)
             up_btn = tk.Button(hall, text="UP", width=6, command=lambda f=fl: self.add_call_dir(f, UP))
             up_btn.grid(row=row, column=1, padx=2, pady=2)
-            if fl == self.top_floor: up_btn.configure(state="disabled")
+            if fl == self.top_floor:
+                up_btn.configure(state="disabled")
             dn_btn = tk.Button(hall, text="DOWN", width=6, command=lambda f=fl: self.add_call_dir(f, DOWN))
             dn_btn.grid(row=row, column=2, padx=2, pady=2)
-            if fl == self.bottom_floor: dn_btn.configure(state="disabled")
+            if fl == self.bottom_floor:
+                dn_btn.configure(state="disabled")
             row += 1
 
-        # 우: 개념도 캔버스
-        right = tk.Frame(body); right.pack(side="left", padx=(10,0))
-        tk.Label(right, text="Concept View", font=("Arial", 11)).pack(anchor="w")
-        self.concept = tk.Canvas(right, width=CONCEPT_W, height=CONCEPT_H, bg="#111")
+        # 3) Concept View (우측 칸으로 이동)
+        concept_box = tk.Frame(rail)
+        concept_box.grid(row=0, column=2, padx=(8, 0), sticky="n")
+        tk.Label(concept_box, text="Concept View", font=("Arial", 11)).pack(anchor="w")
+        self.concept = tk.Canvas(concept_box, width=CONCEPT_W, height=CONCEPT_H, bg="#111")
         self.concept.pack()
+
+        # grid 폭 균형: 필요 시 가중치 조정(지금은 고정폭들)
+        rail.grid_columnconfigure(0, weight=0)
+        rail.grid_columnconfigure(1, weight=0)
+        rail.grid_columnconfigure(2, weight=0)
 
     # ---------- 이벤트 ----------
     def on_start(self):
