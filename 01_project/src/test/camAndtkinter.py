@@ -189,6 +189,8 @@ class DoorSimApp:
         self.door = door
         self.shared = shared
         self.root.title("Elevator Door + Camera (Tkinter)")
+        self.pending_calls = deque()
+        self.call_timeout = 30
 
         # ----- 먼저 치수 정의 -----
         self.canvas_w = 520
@@ -244,6 +246,20 @@ class DoorSimApp:
         self.cam_label = tk.Label(right, width=CAM_VIEW_W, height=CAM_VIEW_H, bg="black")
         self.cam_label.pack()
 
+        panel = tk.LabelFrame(right, text="Other Floor Calls", padx=6, pady=6)
+        panel.pack(fill="x", pady=(10, 0))
+
+        # 대기 중인 호출 미리보기 라벨
+        self.calls_var = tk.StringVar(value="pending: None")
+        tk.Label(panel, textvariable=self.calls_var, anchor="w").grid(row=0, column=0, columnspan=3, sticky="we", pady=(0,6))
+
+        # 15층~1층 버튼 (3열 x 5행)
+        floors = list(range(15, 0, -1))
+        for idx, fl in enumerate(floors):
+            r = idx // 3 + 1   # 1행부터 버튼(0행은 라벨)
+            c = idx % 3
+            tk.Button(panel, text=f"{fl}F", width=8, command=lambda f=fl: self.add_call(f)).grid(row=r, column=c, padx=3, pady=3)
+
     def on_start(self):
         self.door.start_cycle(time.time())
 
@@ -253,6 +269,10 @@ class DoorSimApp:
 
     def tick(self):
         now = time.time()
+
+         # 호출 타임아웃 정리 및 라벨 갱신
+        self.cleanup_calls(self.call_timeout)
+        self.update_calls_label()
 
         # YOLO 감지 플래그 읽기
         with self.shared.lock:
@@ -346,6 +366,37 @@ class DoorSimApp:
         # 참조 유지(가비지 콜렉션 방지)
         self._cam_imgtk = imgtk
         self.cam_label.configure(image=imgtk)
+
+    # 호출 추가
+    def add_call(self, floor: int):
+        # (층, 호출 시각) 저장
+        self.pending_calls.append((floor, time.time()))
+        self.update_calls_label()
+
+    # 타임아웃 정리 (tick에서 주기 호출)
+    def cleanup_calls(self, timeout: int):
+        now = time.time()
+        # 좌측(가장 오래된)부터 만료 제거
+        while self.pending_calls and now - self.pending_calls[0][1] > timeout:
+            self.pending_calls.pop(0) if isinstance(self.pending_calls, list) else self.pending_calls.popleft()
+
+    # 미리보기용
+    def get_pending_preview(self, k: int = 5):
+        return [f for (f, _) in list(self.pending_calls)[:k]]
+
+    def update_calls_label(self):
+        preview = self.get_pending_preview()
+        txt = "pending: " + (", ".join(map(str, preview)) if preview else "None")
+        self.calls_var.set(txt)
+
+    # (선택) 컨트롤러가 소모할 때 사용
+    def pop_next_call(self):
+        return self.pending_calls.popleft()[0] if self.pending_calls else None
+
+    def has_pending_calls(self) -> bool:
+        return len(self.pending_calls) > 0
+
+
 
 # =========================
 # 카메라 + YOLO 스레드
