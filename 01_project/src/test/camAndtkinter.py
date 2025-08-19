@@ -544,13 +544,19 @@ class DoorSimApp:
 # 카메라 + YOLO 스레드
 # =========================
 def camera_worker(shared: Shared, stop_event: threading.Event):
-    cap = cv2.VideoCapture(CAM_INDEX)
+    cap = cv2.VideoCapture(CAM_INDEX, cv2.CAP_DSHOW)
     if not cap.isOpened():
         print("[ERROR] Cannot open camera.")
         stop_event.set()
         return
+    
+    try:
+        model = load_model()
+    except Exception as e:
+        print("[WARN] YOLO load failed, fallback to raw camera:", e)
+        model = None
 
-    model = load_model()
+    
     last_time = time.time()
 
     while not stop_event.is_set():
