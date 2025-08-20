@@ -4,7 +4,7 @@
 import cv2, time, threading, numpy as np
 from dataclasses import dataclass, field
 from collections import deque
-from typing import Set, Optional
+from typing import Set, Optional, Tuple, Dict
 
 import tkinter as tk
 from tkinter import ttk
@@ -69,6 +69,7 @@ stop_event = threading.Event()
 # 유틸(오버레이/모델)
 # =========================
 def load_model():
+    # 가중치 로드 실패해도 RAW 프리뷰 허용을 위해 None 반환 허용
     last_err = None
     for w in MODEL_CANDIDATES:
         try:
@@ -78,7 +79,8 @@ def load_model():
         except Exception as e:
             last_err = e
             print(f"[WARN] Failed to load {w}: {e}")
-    raise RuntimeError(f"Failed to load any weights: {MODEL_CANDIDATES}\nLast: {last_err}")
+    print(f"[WARN] No weights loaded. Running RAW preview. Last error: {last_err}")
+    return None
 
 def draw_state_overlay(frame, state, remain_sec, mode_text):
     x, y = 10, 20
@@ -220,6 +222,14 @@ class DoorSimApp:
         self.car_target = None           # 목적층
         self._last_tick = time.time()
 
+        # ----- 버튼/색상 관리(추가) -----
+        self.floor_btns: Dict[int, tk.Button] = {}
+        self.hall_up_btns: Dict[int, tk.Button] = {}
+        self.hall_dn_btns: Dict[int, tk.Button] = {}
+        self._btn_default_bg: Optional[str] = None
+        self.active_call: Optional[Tuple[int, Optional[str]]] = None  # (floor, direction|None)
+        self._prev_door_state = self.door.state
+
         # ----- UI 구성 -----
         self.loop_enabled = tk.BooleanVar(value=False)
         self._cam_imgtk = None
@@ -295,8 +305,12 @@ class DoorSimApp:
         for idx, fl in enumerate(floors):
             r = idx // 3 + 1
             c = idx % 3
-            tk.Button(floor_panel, text=f"{fl}F", width=8,
-                    command=lambda f=fl: self.add_call(f)).grid(row=r, column=c, padx=3, pady=3)
+            btn = tk.Button(floor_panel, text=f"{fl}F", width=8,
+                            command=lambda f=fl: self.add_call(f))
+            btn.grid(row=r, column=c, padx=3, pady=3)
+            if self._btn_default_bg is None:
+                self._btn_default_bg = btn.cget("background")
+            self.floor_btns[fl] = btn
 
         # Hall Calls
         hall = tk.LabelFrame(rail, text="Hall Calls (Up/Down)", padx=6, pady=6)
@@ -310,6 +324,8 @@ class DoorSimApp:
             dn_btn = tk.Button(hall, text="DOWN", width=6, command=lambda f=fl: self.add_call_dir(f, DOWN))
             dn_btn.grid(row=row, column=2, padx=2, pady=2)
             if fl == self.bottom_floor: dn_btn.configure(state="disabled")
+            self.hall_up_btns[fl] = up_btn
+            self.hall_dn_btns[fl] = dn_btn
             row += 1
 
         # Concept View
@@ -322,7 +338,7 @@ class DoorSimApp:
         rail.grid_columnconfigure(0, weight=0)
         rail.grid_columnconfigure(1, weight=0)
         rail.grid_columnconfigure(2, weight=0)
-        
+
     # ---------- 이벤트 ----------
     def on_start(self):
         self.door.start_cycle(time.time())
@@ -356,25 +372,63 @@ class DoorSimApp:
             return
         self.car_target = target_floor
 
+    # ---------- 호출 버튼 표시/원복 ----------
+    def _mark_floor_button(self, floor: int):
+        btn = self.floor_btns.get(floor)
+        if btn is not None:
+            btn.configure(background="red", state="disabled")
+
+    def _mark_hall_button(self, floor: int, direction: str):
+        btn = self.hall_up_btns.get(floor) if direction == UP else self.hall_dn_btns.get(floor)
+        if btn is not None:
+            btn.configure(background="red", state="disabled")
+
+    def _restore_floor_button(self, floor: int):
+        btn = self.floor_btns.get(floor)
+        if btn is not None and self._btn_default_bg is not None:
+            btn.configure(background=self._btn_default_bg, state="normal")
+
+    def _restore_hall_button(self, floor: int, direction: str):
+        btn = self.hall_up_btns.get(floor) if direction == UP else self.hall_dn_btns.get(floor)
+        if btn is not None and self._btn_default_bg is not None:
+            btn.configure(background=self._btn_default_bg, state="normal")
+
     # ---------- 호출 큐 ----------
     def add_call(self, floor: int):
+        # 중복 방지
+        for f, d, _ in self.pending_calls:
+            if f == floor and d is None:
+                return
+        if self.active_call and self.active_call == (floor, None):
+            return
         self.pending_calls.append((floor, None, time.time()))
+        self._mark_floor_button(floor)
         self.update_calls_label()
 
     def add_call_dir(self, floor: int, direction: str):
         if direction not in (UP, DOWN): return
+        for f, d, _ in self.pending_calls:
+            if f == floor and d == direction:
+                return
+        if self.active_call and self.active_call == (floor, direction):
+            return
         self.pending_calls.append((floor, direction, time.time()))
+        self._mark_hall_button(floor, direction)
         self.update_calls_label()
 
     def cleanup_calls(self, timeout_sec: int):
         now = time.time()
+        changed = False
         while self.pending_calls:
             item = self.pending_calls[0]
             ts = item[2] if len(item) >= 3 else item[1]
             if now - ts > timeout_sec:
                 self.pending_calls.popleft()
+                changed = True
             else:
                 break
+        if changed:
+            self.update_calls_label()
 
     def get_pending_preview(self, k: int = 8):
         out = []
@@ -530,9 +584,23 @@ class DoorSimApp:
 
         # 다음 호출 소비: 문이 닫혀 IDLE이고 이동 목표 없으면 꺼내 이동 시작
         if self.door.state == DoorController.IDLE and self.car_target is None and self.has_pending_calls():
-            item = self.pop_next_call()
-            target = item[0] if len(item) >= 2 else item
-            self.start_move_to(int(target))
+            item = self.pop_next_call()               # (floor, direction, ts)
+            floor = item[0]
+            direction = item[1]
+            self.active_call = (floor, direction)     # 현재 처리 중 호출 기록
+            self.start_move_to(int(floor))
+
+        # "닫힘 완료 → IDLE" 전이에 호출 버튼 원상복구
+        if self._prev_door_state == DoorController.CLOSING and self.door.state == DoorController.IDLE:
+            if self.active_call is not None:
+                f, d = self.active_call
+                if d is None:
+                    self._restore_floor_button(f)
+                else:
+                    self._restore_hall_button(f, d)
+                self.active_call = None
+
+        self._prev_door_state = self.door.state
 
         # 카메라 미리보기 갱신
         self.update_cam_preview()
@@ -543,20 +611,36 @@ class DoorSimApp:
 # =========================
 # 카메라 + YOLO 스레드
 # =========================
+def open_camera_with_fallback(index: int) -> Optional[cv2.VideoCapture]:
+    # OS별 백엔드 폴백: DSHOW → MSMF → V4L2 → 기본
+    backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_V4L2, 0]
+    for be in backends:
+        try:
+            cap = cv2.VideoCapture(index, be) if isinstance(be, int) else cv2.VideoCapture(index, be)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                print(f"[INFO] Camera opened with backend: {be}")
+                return cap
+            else:
+                cap.release()
+        except Exception as e:
+            print(f"[WARN] Backend {be} failed: {e}")
+            try:
+                cap.release()
+            except:
+                pass
+    return None
+
 def camera_worker(shared: Shared, stop_event: threading.Event):
-    cap = cv2.VideoCapture(CAM_INDEX, cv2.CAP_DSHOW)
-    if not cap.isOpened():
-        print("[ERROR] Cannot open camera.")
+    cap = open_camera_with_fallback(CAM_INDEX)
+    if cap is None or not cap.isOpened():
+        print("[ERROR] Cannot open camera with any backend.")
         stop_event.set()
         return
-    
-    try:
-        model = load_model()
-    except Exception as e:
-        print("[WARN] YOLO load failed, fallback to raw camera:", e)
-        model = None
 
-    
+    model = load_model()  # 실패 시 None
+
     last_time = time.time()
 
     while not stop_event.is_set():
@@ -564,26 +648,30 @@ def camera_worker(shared: Shared, stop_event: threading.Event):
         if not ret:
             print("[WARN] Failed to read frame."); break
 
-        # YOLO 추론
-        results = model(frame, conf=CONFIDENCE, classes=TARGET_CLASS_IDS, verbose=False)[0]
         person_present = False
         person_count = 0
         kinds = set()
 
-        if results.boxes is not None and len(results.boxes) > 0:
-            for xyxy, conf, cls in zip(results.boxes.xyxy, results.boxes.conf, results.boxes.cls):
-                x1, y1, x2, y2 = xyxy.int().tolist()
-                conf = float(conf)
-                cls_id = int(cls)
-                name = CLASS_NAME.get(cls_id, str(cls_id))
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0,0,255), 2)
-                cv2.putText(frame, f"{name} {conf:.2f}", (x1, max(0, y1-6)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2, cv2.LINE_AA)
-                if cls_id == 0:
-                    person_present = True
-                    person_count += 1
-                if cls_id in CLASS_NAME:
-                    kinds.add(name)
+        # 모델이 있을 때만 추론 수행(없으면 RAW 프리뷰)
+        if model is not None:
+            try:
+                results = model(frame, conf=CONFIDENCE, classes=TARGET_CLASS_IDS, verbose=False)[0]
+                if results.boxes is not None and len(results.boxes) > 0:
+                    for xyxy, conf, cls in zip(results.boxes.xyxy, results.boxes.conf, results.boxes.cls):
+                        x1, y1, x2, y2 = xyxy.int().tolist()
+                        conf = float(conf)
+                        cls_id = int(cls)
+                        name = CLASS_NAME.get(cls_id, str(cls_id))
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0,0,255), 2)
+                        cv2.putText(frame, f"{name} {conf:.2f}", (x1, max(0, y1-6)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2, cv2.LINE_AA)
+                        if cls_id == 0:
+                            person_present = True
+                            person_count += 1
+                        if cls_id in CLASS_NAME:
+                            kinds.add(name)
+            except Exception as e:
+                print(f"[WARN] Inference error: {e}")
 
         # 상태 오버레이(문/남은시간/모드)
         with shared.lock:
@@ -594,20 +682,20 @@ def camera_worker(shared: Shared, stop_event: threading.Event):
         draw_people_count(frame, person_count)
         draw_caution_banner(frame, kinds)
 
-        # 공유 상태 갱신 + 프레임 전달
-        with shared.lock:
-            shared.person_present = person_present
-            shared.person_count = person_count
-            shared.kinds = kinds.copy()
-            shared.frame_bgr = frame
-
-        # FPS 갱신(텍스트로만 계산)
+        # FPS 텍스트(그린 뒤 공유 저장)
         if SHOW_FPS:
             now = time.time()
             fps = 1.0 / (now - last_time) if (now - last_time) > 0 else 0.0
             last_time = now
             cv2.putText(frame, f"FPS: {fps:.1f}", (10, 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2, cv2.LINE_AA)
+
+        # 공유 상태 갱신 + 프레임 전달
+        with shared.lock:
+            shared.person_present = person_present
+            shared.person_count = person_count
+            shared.kinds = kinds.copy()
+            shared.frame_bgr = frame
 
     cap.release()
 
