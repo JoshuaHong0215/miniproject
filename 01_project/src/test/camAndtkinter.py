@@ -115,7 +115,7 @@ def draw_caution_banner(frame, kinds):
     x = (w - tw) // 2
     y = 40
     pad = 8
-    cv2.rectangle(frame, (x - pad, y - th - pad), (x + tw + pad), (y + pad), (0, 0, 255), -1)
+    cv2.rectangle(frame, (x - pad, y - th - pad), (x + tw + pad, y + pad), (0, 0, 255), -1)
     cv2.putText(frame, text, (x, y), font, scale, (255, 255, 255), thick, cv2.LINE_AA)
 
 # =========================
@@ -612,68 +612,86 @@ class DoorSimApp:
 # 카메라 + YOLO 스레드
 # =========================
 def open_camera_with_fallback(index: int) -> Optional[cv2.VideoCapture]:
-    # OS별 백엔드 폴백: DSHOW → MSMF → V4L2 → 기본
-    backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_V4L2, 0]
-    for be in backends:
-        try:
-            cap = cv2.VideoCapture(index, be) if isinstance(be, int) else cv2.VideoCapture(index, be)
-            if cap.isOpened():
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-                print(f"[INFO] Camera opened with backend: {be}")
+    import sys, time
+    if sys.platform.startswith('win'):
+        backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
+    elif sys.platform.startswith('linux'):
+        backends = [cv2.CAP_V4L2, cv2.CAP_ANY]
+    else:
+        backends = [cv2.CAP_ANY]
+
+    indices = [index] + [i for i in (0,1,2,3) if i != index]
+    for i in indices:
+        for be in backends:
+            cap = cv2.VideoCapture(i, be)
+            if not cap.isOpened():
+                cap.release(); continue
+            # 해상도/버퍼 설정
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            # 스모크 테스트: 실제 프레임 나오는지 확인
+            ok = False
+            for _ in range(10):
+                ret, frame = cap.read()
+                if ret and frame is not None and frame.size:
+                    ok = True; break
+                time.sleep(0.05)
+            if ok:
+                print(f"[INFO] Camera {i} opened with backend: {be}")
                 return cap
-            else:
-                cap.release()
-        except Exception as e:
-            print(f"[WARN] Backend {be} failed: {e}")
-            try:
-                cap.release()
-            except:
-                pass
+            cap.release()
     return None
 
 def camera_worker(shared: Shared, stop_event: threading.Event):
+    print("[DBG] enter camera_worker")
     cap = open_camera_with_fallback(CAM_INDEX)
+    print("[DBG] after open_camera_with_fallback")
+
     if cap is None or not cap.isOpened():
         print("[ERROR] Cannot open camera with any backend.")
-        stop_event.set()
         return
+    print("[OK] camera opened")
 
-    model = load_model()  # 실패 시 None
-
+    model = load_model()  # 실패 시 None 허용
     last_time = time.time()
 
     while not stop_event.is_set():
         ret, frame = cap.read()
         if not ret:
-            print("[WARN] Failed to read frame."); break
+            print("[ERR] cap.read() failed")
+            break
 
         person_present = False
         person_count = 0
         kinds = set()
+        results = None
 
-        # 모델이 있을 때만 추론 수행(없으면 RAW 프리뷰)
+        # --- YOLO 추론: 모델 있을 때만, 예외는 삼킴(프리뷰는 계속) ---
         if model is not None:
             try:
                 results = model(frame, conf=CONFIDENCE, classes=TARGET_CLASS_IDS, verbose=False)[0]
-                if results.boxes is not None and len(results.boxes) > 0:
-                    for xyxy, conf, cls in zip(results.boxes.xyxy, results.boxes.conf, results.boxes.cls):
-                        x1, y1, x2, y2 = xyxy.int().tolist()
-                        conf = float(conf)
-                        cls_id = int(cls)
-                        name = CLASS_NAME.get(cls_id, str(cls_id))
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0,0,255), 2)
-                        cv2.putText(frame, f"{name} {conf:.2f}", (x1, max(0, y1-6)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2, cv2.LINE_AA)
-                        if cls_id == 0:
-                            person_present = True
-                            person_count += 1
-                        if cls_id in CLASS_NAME:
-                            kinds.add(name)
             except Exception as e:
                 print(f"[WARN] Inference error: {e}")
+                results = None
 
-        # 상태 오버레이(문/남은시간/모드)
+        # --- 결과 박스 그리기 ---
+        if results is not None and getattr(results, "boxes", None) is not None and len(results.boxes) > 0:
+            for xyxy, conf, cls in zip(results.boxes.xyxy, results.boxes.conf, results.boxes.cls):
+                x1, y1, x2, y2 = xyxy.int().tolist()
+                conf = float(conf)
+                cls_id = int(cls)
+                name = CLASS_NAME.get(cls_id, str(cls_id))
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0,0,255), 2)
+                cv2.putText(frame, f"{name} {conf:.2f}", (x1, max(0, y1-6)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2, cv2.LINE_AA)
+                if cls_id == 0:
+                    person_present = True
+                    person_count += 1
+                if cls_id in CLASS_NAME:
+                    kinds.add(name)
+
+        # --- 오버레이(상태/사람수/배너) ---
         with shared.lock:
             s_state = shared.state
             s_remain = shared.remain
@@ -682,7 +700,7 @@ def camera_worker(shared: Shared, stop_event: threading.Event):
         draw_people_count(frame, person_count)
         draw_caution_banner(frame, kinds)
 
-        # FPS 텍스트(그린 뒤 공유 저장)
+        # --- FPS (그리고 나서 공유에 저장) ---
         if SHOW_FPS:
             now = time.time()
             fps = 1.0 / (now - last_time) if (now - last_time) > 0 else 0.0
@@ -690,7 +708,7 @@ def camera_worker(shared: Shared, stop_event: threading.Event):
             cv2.putText(frame, f"FPS: {fps:.1f}", (10, 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2, cv2.LINE_AA)
 
-        # 공유 상태 갱신 + 프레임 전달
+        # --- 공유 프레임 갱신 ---
         with shared.lock:
             shared.person_present = person_present
             shared.person_count = person_count
@@ -698,6 +716,7 @@ def camera_worker(shared: Shared, stop_event: threading.Event):
             shared.frame_bgr = frame
 
     cap.release()
+
 
 # =========================
 # 엔트리 포인트
