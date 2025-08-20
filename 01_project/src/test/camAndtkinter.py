@@ -405,6 +405,40 @@ class DoorSimApp:
         self._mark_floor_button(floor)
         self.update_calls_label()
 
+    def select_next_call(self):
+        """대기 중일 때 다음 목적지를 정책에 따라 선택하고 큐에서 제거."""
+        if not self.pending_calls:
+            return None
+
+        cur = float(self.car_pos_f)
+        calls = list(self.pending_calls)
+
+        # 1순위: 현재 위치 '위쪽'에 있는 Hall-DOWN 콜 중 '가장 높은 층'
+        cand = [(f, d, ts) for (f, d, ts) in calls if d == DOWN and f > cur]
+        if cand:
+            target = max(cand, key=lambda x: x[0])
+
+        else:
+            # 2순위: 현재 위치 '아래쪽'에 있는 Hall-UP 콜 중 '가장 낮은 층'
+            cand = [(f, d, ts) for (f, d, ts) in calls if d == UP and f < cur]
+            if cand:
+                target = min(cand, key=lambda x: x[0])
+            else:
+                # 3순위: 그 외(캡슐 내 직접호출 포함)는 '현재와 가장 가까운 층'
+                # tie-break: 방향 있는 콜을 우선(None보다)
+                def key_fn(item):
+                    f, d, ts = item
+                    return (abs(f - cur), 0 if d in (UP, DOWN) else 1, - (d == DOWN))
+                target = min(calls, key=key_fn)
+
+        # 선택 항목을 큐에서 제거
+        for it in list(self.pending_calls):
+            if it[0] == target[0] and it[1] == target[1]:
+                self.pending_calls.remove(it)
+                break
+        return target  # (floor, direction, ts)
+    
+
     def add_call_dir(self, floor: int, direction: str):
         if direction not in (UP, DOWN): return
         for f, d, _ in self.pending_calls:
@@ -584,11 +618,12 @@ class DoorSimApp:
 
         # 다음 호출 소비: 문이 닫혀 IDLE이고 이동 목표 없으면 꺼내 이동 시작
         if self.door.state == DoorController.IDLE and self.car_target is None and self.has_pending_calls():
-            item = self.pop_next_call()               # (floor, direction, ts)
-            floor = item[0]
-            direction = item[1]
-            self.active_call = (floor, direction)     # 현재 처리 중 호출 기록
-            self.start_move_to(int(floor))
+            item = self.select_next_call()               # (floor, direction, ts)
+            if item is not None:
+                floor, direction, _ = item
+                self.active_call = (floor, direction)
+                self.start_move_to(int(floor))
+         
 
         # "닫힘 완료 → IDLE" 전이에 호출 버튼 원상복구
         if self._prev_door_state == DoorController.CLOSING and self.door.state == DoorController.IDLE:
