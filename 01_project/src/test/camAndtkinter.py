@@ -398,6 +398,13 @@ class DoorSimApp:
 
     # ---------- 호출 큐 ----------
     def add_call(self, floor: int):
+        cur = int(round(self.car_pos_f))
+        if floor == cur:
+            # 현재층이면 바로 문 열고 버튼 소등
+            self._restore_floor_button(floor)
+            if self.door.state == DoorController.IDLE:
+                self.door.start_cycle(time.time())
+            return        
         # 중복 방지
         for f, d, _ in self.pending_calls:
             if f == floor and d is None:
@@ -422,8 +429,14 @@ class DoorSimApp:
         cur = float(self.car_pos_f)
         calls = list(self.pending_calls)
 
+        same = [(f, d, ts) for (f, d, ts) in calls if f == int(cur)]
+        if same:
+            target = same[0]
+            self.pending_calls.remove(target)
+            return target        
+
         if self.down_sweep_active:
-            downs_below = [(f, d, ts) for (f, d, ts) in calls if d == DOWN and f < cur]
+            downs_below = [(f, d, ts) for (f, d, ts) in calls if f < cur and (d == DOWN or d is None)]
             if downs_below:
                 target = max(downs_below, key=lambda x: x[0])  # 아래쪽 중 가장 높은 층
                 # 큐에서 제거
@@ -479,11 +492,12 @@ class DoorSimApp:
                     # ★ 원래 가려던 아래층(DOWN)을 큐에 복구 (중복 방지)
                     need_requeue = True
                     for f, d, *_ in self.pending_calls:
-                        if f == old_target and d == DOWN:
+                        if f == old_target and (d == DOWN or d is None):
                             need_requeue = False
                             break
-                    if need_requeue and self.active_call == (old_target, DOWN):
-                        self.pending_calls.append((old_target, DOWN, time.time()))
+                    if need_requeue and (self.active_call == (old_target, DOWN) or self.active_call == (old_target, None)):
+                        old_dir = self.active_call[1]
+                        self.pending_calls.append((old_target, old_dir, DOWN, time.time()))
                         self.update_calls_label()
 
                     self.car_target = new_target
@@ -494,6 +508,14 @@ class DoorSimApp:
 
 
     def add_call_dir(self, floor: int, direction: str):
+        cur = int(round(self.car_pos_f))
+        if floor == cur:
+            # 현재층이면 바로 문 열고 버튼 소등
+            self._restore_hall_button(floor, direction)
+            if self.door.state == DoorController.IDLE:
+                self.door.start_cycle(time.time())
+            return
+
         if direction not in (UP, DOWN): return
         for f, d, _ in self.pending_calls:
             if f == floor and d == direction:
@@ -621,9 +643,7 @@ class DoorSimApp:
         # 큐에서 해당층의 Floor(None) 및 Hall-DOWN 제거
         changed = False
         for it in list(self.pending_calls):
-            f = it[0]
-            
-            if f == floor:
+            if it[0] == floor:
                 self.pending_calls.remove(it)
                 changed = True
         if changed:
@@ -635,10 +655,11 @@ class DoorSimApp:
         self._restore_hall_button(floor, DOWN)
 
         # active_call 정리
-        if self.active_call is not None:
-            af, ad = self.active_call
-            if af == floor:
-                self.active_call = None
+        if self.active_call is not None and self.active_call[0] == floor:
+            self.active_call = None
+            # af, ad = self.active_call
+            # if af == floor:
+            #     self.active_call = None
 
     # ---------- 틱 루프 ----------
     def tick(self):
