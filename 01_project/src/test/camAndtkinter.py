@@ -622,8 +622,8 @@ class DoorSimApp:
         changed = False
         for it in list(self.pending_calls):
             f = it[0]
-            d = it[1] if len(it) >= 2 else None
-            if f == floor and (d is None or d == DOWN):
+            
+            if f == floor:
                 self.pending_calls.remove(it)
                 changed = True
         if changed:
@@ -631,12 +631,13 @@ class DoorSimApp:
 
         # 버튼 빨간불 OFF
         self._restore_floor_button(floor)
+        self._restore_hall_button(floor, UP)
         self._restore_hall_button(floor, DOWN)
 
         # active_call 정리
         if self.active_call is not None:
             af, ad = self.active_call
-            if af == floor and (ad is None or ad == DOWN):
+            if af == floor:
                 self.active_call = None
 
     # ---------- 틱 루프 ----------
@@ -720,6 +721,8 @@ class DoorSimApp:
                     self._restore_floor_button(f)
                 elif d == DOWN:
                     self._restore_hall_button(f, DOWN)
+                elif d == UP:
+                    self._restore_hall_button(f,UP)
                 self.active_call = None
 
         self._prev_door_state = self.door.state
