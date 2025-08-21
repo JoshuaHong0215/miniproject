@@ -419,19 +419,19 @@ class DoorSimApp:
         calls = list(self.pending_calls)
 
         # 1) 위쪽의 DOWN 최고층
-        cand = [(f, d, ts) for (f, d, ts) in calls if d == self.DOWN and f > cur]
+        cand = [(f, d, ts) for (f, d, ts) in calls if d == DOWN and f > cur]
         if cand:
             target = max(cand, key=lambda x: x[0])
         else:
             # 2) 아래쪽의 UP 최저층
-            cand = [(f, d, ts) for (f, d, ts) in calls if d == self.UP and f < cur]
+            cand = [(f, d, ts) for (f, d, ts) in calls if d == UP and f < cur]
             if cand:
                 target = min(cand, key=lambda x: x[0])
             else:
                 # 3) 가까운 층(방향 콜 우선)
                 def key_fn(item):
                     f, d, ts = item
-                    dir_rank = 0 if d in (self.UP, self.DOWN) else 1
+                    dir_rank = 0 if d in (UP, DOWN) else 1
                     return (abs(f - cur), dir_rank)
                 target = min(calls, key=key_fn)
 
@@ -450,12 +450,12 @@ class DoorSimApp:
         going_up = self.car_target > self.car_pos_f
         if going_up:
             higher_down = [f for (f, d, ts) in self.pending_calls
-                        if d == self.DOWN and f > self.car_target]
+                        if d == DOWN and f > self.car_target]
             if higher_down:
                 self.car_target = max(higher_down)
         else:
             lower_up = [f for (f, d, ts) in self.pending_calls
-                        if d == self.UP and f < self.car_target]
+                        if d == UP and f < self.car_target]
             if lower_up:
                 self.car_target = min(lower_up)    
 
@@ -597,6 +597,10 @@ class DoorSimApp:
         move_remain = 0.0
 
         if self.car_target is not None:
+
+            # 이동 중 재선택 호출(collective 확장/축소)
+            self.update_moving_target()
+
             moving = True
             direction = 1.0 if self.car_target > self.car_pos_f else -1.0
             self.car_pos_f += direction * (dt / FLOOR_TIME_SEC)
