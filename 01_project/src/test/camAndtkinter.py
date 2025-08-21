@@ -405,30 +405,34 @@ class DoorSimApp:
         self._mark_floor_button(floor)
         self.update_calls_label()
 
+    # 다음 목적지 선택(Idle 전용)
     def select_next_call(self):
-        """대기 중일 때 다음 목적지를 정책에 따라 선택하고 큐에서 제거."""
+        """다음 목적층 선택(Idle일 때만 사용)
+        규칙:
+            1) 현재 위치 '위쪽'의 DOWN 콜 중 가장 높은 층
+            2) 현재 위치 '아래쪽'의 UP   콜 중 가장 낮은 층
+            3) 그 외: 가까운 층(방향 콜을 None보다 우선)"""
         if not self.pending_calls:
             return None
 
         cur = float(self.car_pos_f)
         calls = list(self.pending_calls)
 
-        # 1순위: 현재 위치 '위쪽'에 있는 Hall-DOWN 콜 중 '가장 높은 층'
-        cand = [(f, d, ts) for (f, d, ts) in calls if d == DOWN and f > cur]
+        # 1) 위쪽의 DOWN 최고층
+        cand = [(f, d, ts) for (f, d, ts) in calls if d == self.DOWN and f > cur]
         if cand:
             target = max(cand, key=lambda x: x[0])
-
         else:
-            # 2순위: 현재 위치 '아래쪽'에 있는 Hall-UP 콜 중 '가장 낮은 층'
-            cand = [(f, d, ts) for (f, d, ts) in calls if d == UP and f < cur]
+            # 2) 아래쪽의 UP 최저층
+            cand = [(f, d, ts) for (f, d, ts) in calls if d == self.UP and f < cur]
             if cand:
                 target = min(cand, key=lambda x: x[0])
             else:
-                # 3순위: 그 외(캡슐 내 직접호출 포함)는 '현재와 가장 가까운 층'
-                # tie-break: 방향 있는 콜을 우선(None보다)
+                # 3) 가까운 층(방향 콜 우선)
                 def key_fn(item):
                     f, d, ts = item
-                    return (abs(f - cur), 0 if d in (UP, DOWN) else 1, - (d == DOWN))
+                    dir_rank = 0 if d in (self.UP, self.DOWN) else 1
+                    return (abs(f - cur), dir_rank)
                 target = min(calls, key=key_fn)
 
         # 선택 항목을 큐에서 제거
@@ -437,7 +441,23 @@ class DoorSimApp:
                 self.pending_calls.remove(it)
                 break
         return target  # (floor, direction, ts)
-    
+
+    def update_moving_target(self):
+        """상행 중: target 위에 새로 생긴 DOWN 콜이 있으면 '최고층'으로 확장
+        하행 중: target 아래에 새로 생긴 UP   콜이 있으면 '최하층'으로 축소"""
+        if self.car_target is None:
+            return
+        going_up = self.car_target > self.car_pos_f
+        if going_up:
+            higher_down = [f for (f, d, ts) in self.pending_calls
+                        if d == self.DOWN and f > self.car_target]
+            if higher_down:
+                self.car_target = max(higher_down)
+        else:
+            lower_up = [f for (f, d, ts) in self.pending_calls
+                        if d == self.UP and f < self.car_target]
+            if lower_up:
+                self.car_target = min(lower_up)    
 
     def add_call_dir(self, floor: int, direction: str):
         if direction not in (UP, DOWN): return
