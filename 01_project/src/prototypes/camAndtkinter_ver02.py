@@ -32,7 +32,7 @@ PAD_COLOR = (0, 0, 0)       # fit 모드 레터박스 색(BGR)
 # =========================
 OPENING_SEC = 4
 HOLD_DEFAULT = 7
-HOLD_SHORT = 4
+HOLD_SHORT = 3
 CLOSING_SEC = 4
 
 FLOORS_TOTAL = 15
@@ -166,7 +166,7 @@ class DoorController:
                 self.mode_text = "MODE: 4/7/4"
             else:
                 self.hold_target = HOLD_SHORT
-                self.mode_text = "MODE: 4/4/4 (no person)"
+                self.mode_text = "MODE: 4/3/4 (no person)"
             remain = self.hold_target - elapsed
             self._print_sec(elapsed, self.hold_target)
             if elapsed >= self.hold_target:
@@ -732,7 +732,7 @@ class DoorSimApp:
 
         # 애니메이션/상태 텍스트
         self.animate(state, remain)
-        cycle_txt = "4/7/4" if (state != "OPEN_HOLD" or self.door.hold_target == HOLD_DEFAULT) else "4/4/4"
+        cycle_txt = "4/7/4" if (state != "OPEN_HOLD" or self.door.hold_target == HOLD_DEFAULT) else "4/3/4"
         self.update_status_text(state.replace("OPEN_HOLD", "DWELL"), remain, f"cycle: {cycle_txt} | {mode_text}")
 
         # 다음 호출 소비: 문이 닫혀 IDLE이고 이동 목표 없으면 꺼내 이동 시작
