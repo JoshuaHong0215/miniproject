@@ -222,6 +222,9 @@ class DoorSimApp:
         self.car_target = None           # 목적층
         self._last_tick = time.time()
 
+        # -----내림차순 정차모드 -----
+        self.down_sweep_active = False
+
         # ----- 버튼/색상 관리(추가) -----
         self.floor_btns: Dict[int, tk.Button] = {}
         self.hall_up_btns: Dict[int, tk.Button] = {}
@@ -405,35 +408,54 @@ class DoorSimApp:
         self._mark_floor_button(floor)
         self.update_calls_label()
 
-    # 다음 목적지 선택(Idle 전용)
+    # 다음 목적지 선택(Idle 전용) — 요구사항 반영
     def select_next_call(self):
         """다음 목적층 선택(Idle일 때만 사용)
-        규칙:
-            1) 현재 위치 '위쪽'의 DOWN 콜 중 가장 높은 층
-            2) 현재 위치 '아래쪽'의 UP   콜 중 가장 낮은 층
-            3) 그 외: 가까운 층(방향 콜을 None보다 우선)"""
+        요구사항:
+          - 현재층보다 '위'에 있는 DOWN 콜이 하나라도 있으면 그 중 '최고층'으로 먼저 이동
+          - 그렇지 않다면 현재층보다 '아래'에 있는 DOWN 콜 중 '가장 높은 층'(=내림차순 다음 정차) 선택
+          - DOWN 콜이 전혀 없으면 기존 규칙 일부 유지(UP 등 폴백)
+        """
         if not self.pending_calls:
             return None
 
         cur = float(self.car_pos_f)
         calls = list(self.pending_calls)
 
-        # 1) 위쪽의 DOWN 최고층
-        cand = [(f, d, ts) for (f, d, ts) in calls if d == DOWN and f > cur]
-        if cand:
-            target = max(cand, key=lambda x: x[0])
-        else:
-            # 2) 아래쪽의 UP 최저층
-            cand = [(f, d, ts) for (f, d, ts) in calls if d == UP and f < cur]
-            if cand:
-                target = min(cand, key=lambda x: x[0])
+        if self.down_sweep_active:
+            downs_below = [(f, d, ts) for (f, d, ts) in calls if d == DOWN and f < cur]
+            if downs_below:
+                target = max(downs_below, key=lambda x: x[0])  # 아래쪽 중 가장 높은 층
+                # 큐에서 제거
+                for it in list(self.pending_calls):
+                    if it[0] == target[0] and it[1] == target[1]:
+                        self.pending_calls.remove(it)
+                        break
+                return target
             else:
-                # 3) 가까운 층(방향 콜 우선)
-                def key_fn(item):
-                    f, d, ts = item
-                    dir_rank = 0 if d in (UP, DOWN) else 1
-                    return (abs(f - cur), dir_rank)
-                target = min(calls, key=key_fn)
+                # 더 이상 아래로 갈 DOWN이 없으면 모드 해제하고 일반 규칙으로 복귀
+                self.down_sweep_active = False        
+
+        # 1) 위쪽의 DOWN 최고층
+        downs_above = [(f, d, ts) for (f, d, ts) in calls if d == DOWN and f > cur]
+        if downs_above:
+            target = max(downs_above, key=lambda x: x[0])
+        else:
+            # 2) 아래쪽의 DOWN 중 '가장 높은 층'
+            downs_below = [(f, d, ts) for (f, d, ts) in calls if d == DOWN and f < cur]
+            if downs_below:
+                target = max(downs_below, key=lambda x: x[0])
+            else:
+                # 3) 폴백: 아래쪽의 UP 최저층 → 그 외 가장 가까운 층(방향 콜을 우선)
+                ups_below = [(f, d, ts) for (f, d, ts) in calls if d == UP and f < cur]
+                if ups_below:
+                    target = min(ups_below, key=lambda x: x[0])
+                else:
+                    def key_fn(item):
+                        f, d, ts = item
+                        dir_rank = 0 if d in (UP, DOWN) else 1
+                        return (abs(f - cur), dir_rank)
+                    target = min(calls, key=key_fn)
 
         # 선택 항목을 큐에서 제거
         for it in list(self.pending_calls):
@@ -442,22 +464,34 @@ class DoorSimApp:
                 break
         return target  # (floor, direction, ts)
 
+
     def update_moving_target(self):
-        """상행 중: target 위에 새로 생긴 DOWN 콜이 있으면 '최고층'으로 확장
-        하행 중: target 아래에 새로 생긴 UP   콜이 있으면 '최하층'으로 축소"""
         if self.car_target is None:
             return
         going_up = self.car_target > self.car_pos_f
         if going_up:
-            higher_down = [f for (f, d, ts) in self.pending_calls
-                        if d == DOWN and f > self.car_target]
+            higher_down = [f for (f, d, ts) in self.pending_calls if d == DOWN and f > self.car_target]
             if higher_down:
-                self.car_target = max(higher_down)
+                old_target = int(self.car_target)
+                new_target = max(higher_down)
+
+                if new_target > old_target:
+                    # ★ 원래 가려던 아래층(DOWN)을 큐에 복구 (중복 방지)
+                    need_requeue = True
+                    for f, d, *_ in self.pending_calls:
+                        if f == old_target and d == DOWN:
+                            need_requeue = False
+                            break
+                    if need_requeue and self.active_call == (old_target, DOWN):
+                        self.pending_calls.append((old_target, DOWN, time.time()))
+                        self.update_calls_label()
+
+                    self.car_target = new_target
         else:
-            lower_up = [f for (f, d, ts) in self.pending_calls
-                        if d == UP and f < self.car_target]
+            lower_up = [f for (f, d, ts) in self.pending_calls if d == UP and f < self.car_target]
             if lower_up:
-                self.car_target = min(lower_up)    
+                self.car_target = min(lower_up)
+
 
     def add_call_dir(self, floor: int, direction: str):
         if direction not in (UP, DOWN): return
@@ -582,6 +616,29 @@ class DoorSimApp:
     def update_status_text(self, state: str, remain: float, extra: str):
         self.status_var.set(f"state: {state} | remain: {remain:.1f}s | {extra}")
 
+    # ---------- 도착 즉시 버튼/큐 정리(요구사항 2) ----------
+    def _clear_calls_on_arrival(self, floor: int):
+        # 큐에서 해당층의 Floor(None) 및 Hall-DOWN 제거
+        changed = False
+        for it in list(self.pending_calls):
+            f = it[0]
+            d = it[1] if len(it) >= 2 else None
+            if f == floor and (d is None or d == DOWN):
+                self.pending_calls.remove(it)
+                changed = True
+        if changed:
+            self.update_calls_label()
+
+        # 버튼 빨간불 OFF
+        self._restore_floor_button(floor)
+        self._restore_hall_button(floor, DOWN)
+
+        # active_call 정리
+        if self.active_call is not None:
+            af, ad = self.active_call
+            if af == floor and (ad is None or ad == DOWN):
+                self.active_call = None
+
     # ---------- 틱 루프 ----------
     def tick(self):
         now = time.time()
@@ -597,17 +654,18 @@ class DoorSimApp:
         move_remain = 0.0
 
         if self.car_target is not None:
-
-            # 이동 중 재선택 호출(collective 확장/축소)
+            moving = True
+            # 이동 중 위쪽에 새 DOWN 콜이 생기면 목적층을 위로 확장 (요구사항 1)
             self.update_moving_target()
 
-            moving = True
             direction = 1.0 if self.car_target > self.car_pos_f else -1.0
             self.car_pos_f += direction * (dt / FLOOR_TIME_SEC)
             arrived = (direction > 0 and self.car_pos_f >= self.car_target) or \
                       (direction < 0 and self.car_pos_f <= self.car_target)
             if arrived:
                 self.car_pos_f = float(self.car_target)
+                # 도착 즉시 버튼/큐 정리 (요구사항 2)
+                self._clear_calls_on_arrival(int(self.car_pos_f))
                 self.car_target = None
                 self.door.start_cycle(now)
             else:
@@ -645,18 +703,23 @@ class DoorSimApp:
             item = self.select_next_call()               # (floor, direction, ts)
             if item is not None:
                 floor, direction, _ = item
+
+                if direction == DOWN and float(floor) > float(self.car_pos_f):
+                    self.down_sweep_active = True
+
+
                 self.active_call = (floor, direction)
                 self.start_move_to(int(floor))
-         
 
-        # "닫힘 완료 → IDLE" 전이에 호출 버튼 원상복구
+        # "닫힘 완료 → IDLE" 전이에 호출 버튼 원상복구 (남은 것만)
         if self._prev_door_state == DoorController.CLOSING and self.door.state == DoorController.IDLE:
             if self.active_call is not None:
                 f, d = self.active_call
+                # 도착 즉시 정리했으므로 여기서는 남아있을 수도 있는 케이스만 방어
                 if d is None:
                     self._restore_floor_button(f)
-                else:
-                    self._restore_hall_button(f, d)
+                elif d == DOWN:
+                    self._restore_hall_button(f, DOWN)
                 self.active_call = None
 
         self._prev_door_state = self.door.state
