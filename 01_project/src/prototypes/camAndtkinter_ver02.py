@@ -497,7 +497,8 @@ class DoorSimApp:
                             break
                     if need_requeue and (self.active_call == (old_target, DOWN) or self.active_call == (old_target, None)):
                         old_dir = self.active_call[1]
-                        self.pending_calls.append((old_target, old_dir, DOWN, time.time()))
+                        self.pending_calls.append((old_target, old_dir, time.time()))
+                        # self.pending_calls.append((old_target, old_dir, DOWN, time.time()))
                         self.update_calls_label()
 
                     self.car_target = new_target
@@ -526,19 +527,33 @@ class DoorSimApp:
         self._mark_hall_button(floor, direction)
         self.update_calls_label()
 
-    def cleanup_calls(self, timeout_sec: int):
+    def cleanup_calls(self, timeout_sec):
         now = time.time()
         changed = False
         while self.pending_calls:
-            item = self.pending_calls[0]
-            ts = item[2] if len(item) >= 3 else item[1]
-            if now - ts > timeout_sec:
-                self.pending_calls.popleft()
-                changed = True
-            else:
+            f, d, ts = self.pending_calls[0]
+            # ★ Floor(None)는 타임아웃 제외
+            if d is None or now - ts <= timeout_sec:
                 break
+            self.pending_calls.popleft()
+            changed = True
         if changed:
             self.update_calls_label()
+
+
+    # def cleanup_calls(self, timeout_sec: int):
+    #     now = time.time()
+    #     changed = False
+    #     while self.pending_calls:
+    #         item = self.pending_calls[0]
+    #         ts = item[2] if len(item) >= 3 else item[1]
+    #         if now - ts > timeout_sec:
+    #             self.pending_calls.popleft()
+    #             changed = True
+    #         else:
+    #             break
+    #     if changed:
+    #         self.update_calls_label()
 
     def get_pending_preview(self, k: int = 8):
         out = []
@@ -734,17 +749,17 @@ class DoorSimApp:
                 self.start_move_to(int(floor))
 
         # "닫힘 완료 → IDLE" 전이에 호출 버튼 원상복구 (남은 것만)
-        if self._prev_door_state == DoorController.CLOSING and self.door.state == DoorController.IDLE:
-            if self.active_call is not None:
-                f, d = self.active_call
-                # 도착 즉시 정리했으므로 여기서는 남아있을 수도 있는 케이스만 방어
-                if d is None:
-                    self._restore_floor_button(f)
-                elif d == DOWN:
-                    self._restore_hall_button(f, DOWN)
-                elif d == UP:
-                    self._restore_hall_button(f,UP)
-                self.active_call = None
+        # if self._prev_door_state == DoorController.CLOSING and self.door.state == DoorController.IDLE:
+        #     if self.active_call is not None:
+        #         f, d = self.active_call
+        #         # 도착 즉시 정리했으므로 여기서는 남아있을 수도 있는 케이스만 방어
+        #         if d is None:
+        #             self._restore_floor_button(f)
+        #         elif d == DOWN:
+        #             self._restore_hall_button(f, DOWN)
+        #         elif d == UP:
+        #             self._restore_hall_button(f,UP)
+        #         self.active_call = None
 
         self._prev_door_state = self.door.state
 
